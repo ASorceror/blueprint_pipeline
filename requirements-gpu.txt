@@ -1,0 +1,19 @@
+# Blueprint Pipeline - GPU Dependencies
+# Use this instead of requirements.txt if you have an NVIDIA GPU
+
+# Core Dependencies (same as requirements.txt)
+pymupdf>=1.24.0
+shapely>=2.0.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+pandas>=2.0.0
+pyyaml>=6.0
+
+# OCR - GPU version
+# Install paddlepaddle-gpu matching your CUDA version
+# Check CUDA version with: nvidia-smi
+# Then install from: https://www.paddlepaddle.org.cn/whl/windows/gpu/develop.html
+paddleocr>=2.7.0
+
+# Fallback OCR
+pytesseract>=0.3.10

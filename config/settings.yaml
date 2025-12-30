@@ -1,0 +1,122 @@
+# Blueprint Pipeline Configuration
+# All values here can be overridden via CLI arguments
+
+# =============================================================================
+# DEFAULT SETTINGS
+# =============================================================================
+defaults:
+  # Output units: "imperial" (feet, sqft) or "metric" (meters, sqm)
+  units: imperial
+
+  # Default ceiling height if not detected (feet or meters based on units)
+  default_ceiling_height: 10.0
+
+  # Door gap tolerance in inches (used for gap bridging)
+  door_gap_tolerance: 0.5
+
+  # DPI for raster rendering
+  render_dpi: 300
+
+# =============================================================================
+# OCR SETTINGS
+# =============================================================================
+ocr:
+  # OCR engine: "paddleocr" or "tesseract"
+  engine: paddleocr
+
+  # Use GPU for OCR (requires paddlepaddle-gpu)
+  use_gpu: false
+
+  # OCR language (paddleocr: "en", tesseract: "eng")
+  language: en
+
+  # Minimum confidence threshold for OCR results (0-1)
+  confidence_threshold: 0.6
+
+# =============================================================================
+# OUTPUT SETTINGS
+# =============================================================================
+output:
+  # Generate CSV output
+  csv: true
+
+  # Generate JSON output
+  json: true
+
+  # Generate annotated PDF with room outlines
+  annotated_pdf: true
+
+  # Include polygon geometry in JSON output
+  include_geometry_in_json: true
+
+  # Name for the annotation layer in PDF
+  layer_name: "Extracted Rooms"
+
+  # Outline color for room annotations (RGB hex)
+  outline_color: "#FF0000"
+
+  # Outline stroke width in points
+  outline_width: 1.0
+
+  # Label font size in points
+  label_font_size: 8
+
+  # Area text font size in points
+  area_font_size: 6
+
+# =============================================================================
+# VALIDATION SETTINGS
+# =============================================================================
+validation:
+  # Minimum room area (sqft for imperial, sqm for metric)
+  min_room_area: 25
+
+  # Maximum room area (sqft for imperial, sqm for metric)
+  max_room_area: 100000
+
+  # Minimum ceiling height (feet for imperial, meters for metric)
+  min_ceiling_height: 7
+
+  # Maximum ceiling height (feet for imperial, meters for metric)
+  max_ceiling_height: 60
+
+  # Minimum polygon vertices to be considered a room
+  min_vertices: 4
+
+  # Maximum page coverage ratio for valid rooms (0-1)
+  max_area_page_ratio: 0.85
+
+# =============================================================================
+# LOGGING SETTINGS
+# =============================================================================
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: INFO
+
+  # Write log to file (in addition to console)
+  file: true
+
+  # Log format
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+
+# =============================================================================
+# ADVANCED SETTINGS
+# Generally should not need to modify these
+# =============================================================================
+advanced:
+  # Scale conflict warning threshold (percent difference)
+  scale_conflict_threshold: 15
+
+  # Label search expansion ratio (how far outside polygon to search)
+  label_search_expansion: 0.15
+
+  # Parallel angle tolerance for double-wall detection (degrees)
+  parallel_angle_tolerance: 3
+
+  # Maximum double-line distance for wall merging (points)
+  double_line_distance_max: 10
+
+  # Memory management
+  large_file_mb_threshold: 500
+  large_page_count_threshold: 100
+  partial_save_interval: 10

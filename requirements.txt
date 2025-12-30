@@ -1,0 +1,16 @@
+# Blueprint Pipeline - Core Dependencies
+# Install in this order
+
+pymupdf>=1.24.0
+shapely>=2.0.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+pandas>=2.0.0
+pyyaml>=6.0
+
+# OCR - CPU version (see requirements-gpu.txt for GPU)
+paddlepaddle>=2.5.0
+paddleocr>=2.7.0
+
+# Fallback OCR
+pytesseract>=0.3.10
