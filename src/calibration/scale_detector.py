@@ -90,8 +90,9 @@ SCALE_FRACTIONAL_PATTERN = re.compile(
 )
 
 # Scale notation - Metric ratio: 1:100, 1 : 50
+# Requires at least 2 digits AND not followed by AM/PM to avoid matching timestamps
 SCALE_RATIO_PATTERN = re.compile(
-    r"1\s*:\s*(\d+)",
+    r"1\s*:\s*(\d{2,})(?!\s*[AP]M)",
     re.IGNORECASE
 )
 

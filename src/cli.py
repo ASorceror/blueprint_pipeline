@@ -148,6 +148,69 @@ Examples:
         help="Save intermediate images for debugging"
     )
 
+    # Detection mode options
+    detection_group = parser.add_argument_group('detection mode')
+
+    detection_group.add_argument(
+        "--label-driven",
+        action="store_true",
+        default=True,
+        help="Use label-driven detection (default, NEW approach)"
+    )
+
+    detection_group.add_argument(
+        "--geometry-only",
+        action="store_true",
+        help="Use geometry-only detection (OLD approach, disables label-driven)"
+    )
+
+    detection_group.add_argument(
+        "--label-confidence",
+        type=float,
+        default=0.5,
+        help="Minimum label confidence threshold (default: 0.5)"
+    )
+
+    detection_group.add_argument(
+        "--boundary-completeness",
+        type=float,
+        default=0.5,
+        help="Minimum boundary wall coverage (default: 0.5)"
+    )
+
+    # Filter options
+    filter_group = parser.add_argument_group('segment filtering')
+
+    filter_group.add_argument(
+        "--no-filters",
+        action="store_true",
+        help="Disable all segment filtering"
+    )
+
+    filter_group.add_argument(
+        "--no-title-block-filter",
+        action="store_true",
+        help="Disable title block area filtering"
+    )
+
+    filter_group.add_argument(
+        "--no-hatching-filter",
+        action="store_true",
+        help="Disable hatching pattern filtering"
+    )
+
+    filter_group.add_argument(
+        "--no-dimension-filter",
+        action="store_true",
+        help="Disable dimension line filtering"
+    )
+
+    filter_group.add_argument(
+        "--no-annotation-filter",
+        action="store_true",
+        help="Disable annotation line filtering"
+    )
+
     return parser
 
 

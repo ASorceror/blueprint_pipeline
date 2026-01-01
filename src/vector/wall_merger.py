@@ -164,8 +164,10 @@ def calculate_centerline(seg_a: Segment, seg_b: Segment) -> Segment:
     start = (center_mid[0] - dx, center_mid[1] - dy)
     end = (center_mid[0] + dx, center_mid[1] + dy)
 
-    # Use average width
-    avg_width = (seg_a.width + seg_b.width) / 2
+    # Use average width (default to 1.0 if None)
+    width_a = seg_a.width if seg_a.width is not None else 1.0
+    width_b = seg_b.width if seg_b.width is not None else 1.0
+    avg_width = (width_a + width_b) / 2
 
     return Segment(start=start, end=end, width=avg_width)
 

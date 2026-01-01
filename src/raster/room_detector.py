@@ -10,8 +10,30 @@ from typing import List, Tuple, Optional
 
 import cv2
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, MultiPolygon
 from shapely.validation import make_valid
+
+
+def get_largest_polygon(geom) -> Optional[Polygon]:
+    """
+    Extract the largest polygon from a geometry.
+    Handles both Polygon and MultiPolygon cases.
+
+    Args:
+        geom: Shapely geometry (Polygon or MultiPolygon)
+
+    Returns:
+        Largest Polygon or None if invalid
+    """
+    if geom is None:
+        return None
+    if isinstance(geom, Polygon):
+        return geom
+    if isinstance(geom, MultiPolygon):
+        if len(geom.geoms) == 0:
+            return None
+        return max(geom.geoms, key=lambda p: p.area)
+    return None
 
 from ..constants import (
     MIN_CONTOUR_AREA_RATIO,
@@ -209,6 +231,7 @@ def detect_rooms_flood_fill(
                         largest, w, h, page_width, page_height, dpi
                     )
 
+                    polygon = get_largest_polygon(polygon)
                     if polygon and polygon.area > 0:
                         vertices = list(polygon.exterior.coords)[:-1]  # Remove closing point
 
@@ -281,6 +304,7 @@ def detect_rooms_connected_components(
                 largest, w, h, page_width, page_height, dpi
             )
 
+            polygon = get_largest_polygon(polygon)
             if polygon and polygon.area > 0:
                 vertices = list(polygon.exterior.coords)[:-1]
 
@@ -340,6 +364,7 @@ def detect_rooms_contours(
             contour, w, h, page_width, page_height, dpi
         )
 
+        polygon = get_largest_polygon(polygon)
         if polygon and polygon.area > 0:
             vertices = list(polygon.exterior.coords)[:-1]
 

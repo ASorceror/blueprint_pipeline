@@ -11,6 +11,7 @@ from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass
 
 import pymupdf
+from PIL import Image
 from shapely.geometry import Polygon
 
 from .constants import (
@@ -23,12 +24,17 @@ from .constants import (
     DEFAULT_COMMERCIAL_SCALE,
     DEFAULT_COMMERCIAL_SCALE_FACTOR,
     POINTS_PER_INCH,
+    MAX_VECTOR_SEGMENTS,
+    TITLE_BLOCK_SEARCH_REGION_START,
+    TITLE_BLOCK_SEARCH_REGION_END,
+    TITLE_BLOCK_DEFAULT_X1,
 )
 from .pdf.reader import open_pdf, get_page_count, get_page_dimensions, render_page_to_image
 from .pdf.classifier import classify_page_type, classify_page
-from .vector.extractor import extract_wall_segments
+from .vector.extractor import extract_wall_segments, extract_wall_segments_simple
 from .vector.wall_merger import detect_and_merge_double_walls
 from .vector.polygonizer import bridge_gaps, segments_to_polygons, filter_room_polygons
+from .vector.filters import SegmentFilterPipeline, FilterConfig
 from .calibration.scale_detector import (
     extract_scale_from_page,
     parse_manual_scale,
@@ -62,7 +68,10 @@ from .geometry.calculator import (
 from .output.csv_writer import write_rooms_to_csv, generate_csv_filename
 from .output.json_writer import write_rooms_to_json, generate_json_filename
 from .output.pdf_annotator import create_annotated_pdf, generate_annotated_pdf_filename
-
+from .detection.hybrid_detector import (
+    HybridRoomDetector,
+    create_rooms_from_detection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +92,16 @@ class PipelineConfig:
     no_annotate: bool = False
     verbose: bool = False
     debug: bool = False
+    # Segment filtering options
+    enable_filters: bool = True
+    filter_title_block: bool = True
+    filter_hatching: bool = True
+    filter_dimension: bool = True
+    filter_annotation: bool = True
+    # Label-driven detection options
+    label_driven: bool = True  # Use label-driven detection by default
+    label_min_confidence: float = 0.5
+    boundary_min_completeness: float = 0.5
 
 
 @dataclass
@@ -223,7 +242,8 @@ def process_vector_page(
     page: pymupdf.Page,
     page_num: int,
     scale_factor: float,
-    config: PipelineConfig
+    config: PipelineConfig,
+    filter_pipeline: Optional[SegmentFilterPipeline] = None
 ) -> Tuple[List[Room], List[str]]:
     """
     Process a vector PDF page.
@@ -233,6 +253,7 @@ def process_vector_page(
         page_num: Page number (0-indexed)
         scale_factor: Scale factor for conversion
         config: Pipeline configuration
+        filter_pipeline: Optional segment filter pipeline
 
     Returns:
         Tuple of (rooms, warnings)
@@ -247,20 +268,48 @@ def process_vector_page(
     text_blocks = []
     if not config.no_ocr:
         try:
-            text_blocks = extract_all_text(page, config.dpi, use_ocr=True)
+            # Render page to image for OCR
+            page_image = render_page_to_image(page, config.dpi)
+            text_blocks = extract_all_text(page, page_image=page_image, force_ocr=True)
         except Exception as e:
             warnings.append(f"Text extraction failed: {e}")
-            text_blocks = extract_all_text(page, config.dpi, use_ocr=False)
+            text_blocks = extract_all_text(page, page_image=None, force_ocr=False)
     else:
-        text_blocks = extract_all_text(page, config.dpi, use_ocr=False)
+        text_blocks = extract_all_text(page, page_image=None, force_ocr=False)
 
     # Filter for room labels
     room_labels = filter_room_labels(text_blocks)
 
     # Extract vector segments
-    segments = extract_wall_segments(page)
+    segments, extraction_info = extract_wall_segments(page)
     if not segments:
         warnings.append(f"No vector segments found on page {page_num + 1}")
+        return rooms, warnings
+
+    original_segment_count = len(segments)
+
+    # Check for overly complex CAD files
+    if len(segments) > MAX_VECTOR_SEGMENTS:
+        logger.warning(
+            f"Page {page_num + 1} has {len(segments)} segments (>{MAX_VECTOR_SEGMENTS}). "
+            f"Complex CAD file - processing may be slow."
+        )
+        warnings.append(f"Complex CAD: {len(segments)} segments detected")
+
+    # Apply segment filters (title block, hatching, etc.)
+    if filter_pipeline is not None and config.enable_filters:
+        segments, filter_stats = filter_pipeline.filter(
+            segments, page_width, page_height, text_blocks
+        )
+        if filter_stats.total_removed > 0:
+            logger.info(
+                f"Page {page_num + 1}: Filtered {filter_stats.total_removed} "
+                f"of {original_segment_count} segments "
+                f"({filter_stats.total_removal_rate:.1%})"
+            )
+
+    if not segments:
+        warnings.append(f"No segments remaining after filtering on page {page_num + 1}")
         return rooms, warnings
 
     # Merge double walls
@@ -273,27 +322,32 @@ def process_vector_page(
     # Polygonize (includes filtering)
     room_polygons, debug_info = segments_to_polygons(bridged_segments, page_width, page_height)
 
+    # Filter polygons to drawing area (exclude title block rooms)
+    if filter_pipeline is not None and config.enable_filters:
+        room_polygons, polygon_removed = filter_pipeline.filter_polygons(
+            room_polygons, page_width, page_height
+        )
+        if polygon_removed > 0:
+            logger.debug(f"Page {page_num + 1}: Filtered {polygon_removed} polygons outside drawing area")
+
     if not room_polygons:
         warnings.append(f"No valid room polygons on page {page_num + 1}")
         return rooms, warnings
 
-    # Extract Shapely polygons for label matching
-    shapely_polygons = [rp.shapely_polygon for rp in room_polygons]
-
-    # Match labels to polygons
-    label_matches = match_labels_to_polygons(room_labels, shapely_polygons)
+    # Match labels to polygons (pass RoomPolygon list, not Shapely polygons)
+    label_matches = match_labels_to_polygons(room_labels, room_polygons)
 
     # Create room objects
     for i, room_polygon in enumerate(room_polygons):
         room_id = f"room_{page_num:03d}_{i:03d}"
 
-        # Get matched label
+        # Get matched label by polygon_id
         room_name = f"ROOM {i + 1}"
         label_confidence = Confidence.NONE
-        for label in label_matches:
-            if label.polygon_index == i:
-                room_name = label.text
-                label_confidence = label.confidence
+        for match in label_matches:
+            if match.polygon_id == room_polygon.polygon_id:
+                room_name = match.room_name
+                label_confidence = match.name_confidence
                 break
 
         # Create room
@@ -354,11 +408,11 @@ def process_raster_page(
         warnings.append(f"Failed to render page: {e}")
         return rooms, warnings
 
-    # Extract text
+    # Extract text using rendered image for OCR
     text_blocks = []
     if not config.no_ocr:
         try:
-            text_blocks = extract_all_text(page, config.dpi, use_ocr=True)
+            text_blocks = extract_all_text(page, page_image=image, force_ocr=True)
         except Exception as e:
             warnings.append(f"OCR failed: {e}")
 
@@ -367,42 +421,184 @@ def process_raster_page(
     # Preprocess image
     preprocessing_result = preprocess_image(image, config.dpi)
 
-    # Detect rooms
-    raster_rooms, quality = detect_rooms_from_raster(
-        preprocessing_result.binary,
+    # Transform label centroids from PDF coordinates to image coordinates
+    # PDF: origin bottom-left, Y increases upward
+    # Image: origin top-left, Y increases downward
+    label_centroids_image = None
+    if room_labels:
+        img_h, img_w = preprocessing_result.binary_image.shape[:2]
+        label_centroids_image = []
+        for label in room_labels:
+            pdf_x, pdf_y = label.centroid
+            # Transform PDF coords to image coords
+            img_x = (pdf_x / page_width) * img_w
+            img_y = ((page_height - pdf_y) / page_height) * img_h  # Flip Y
+            label_centroids_image.append((img_x, img_y))
+
+    detection_result = detect_rooms_from_raster(
+        preprocessing_result.binary_image,
         page_width, page_height,
         config.dpi,
-        room_labels
+        label_centroids_image
     )
 
-    if quality == "POOR":
+    if detection_result.quality == "POOR":
         warnings.append(f"Low quality room detection on page {page_num + 1}")
 
-    # Convert to Room objects
-    for i, (polygon, label) in enumerate(raster_rooms):
-        room_id = f"room_{page_num:03d}_{i:03d}"
-        room_name = label if label else f"ROOM {i + 1}"
+    # Match labels to detected room polygons
+    label_matches = match_labels_to_polygons(room_labels, detection_result.rooms)
 
-        vertices = list(polygon.exterior.coords)[:-1] if hasattr(polygon, 'exterior') else []
+    # Convert to Room objects
+    for i, room_polygon in enumerate(detection_result.rooms):
+        room_id = f"room_{page_num:03d}_{i:03d}"
+
+        # Get matched label by polygon_id
+        room_name = f"ROOM {i + 1}"
+        label_confidence = Confidence.NONE
+        for match in label_matches:
+            if match.polygon_id == room_polygon.polygon_id:
+                room_name = match.room_name
+                label_confidence = match.name_confidence
+                break
+
         room = create_room_from_polygon(
             polygon_id=room_id,
-            polygon=polygon,
-            vertices=vertices,
+            polygon=room_polygon.shapely_polygon,
+            vertices=room_polygon.vertices,
             room_name=room_name,
             sheet_number=page_num,
             scale_factor=scale_factor,
             ceiling_height_ft=config.default_height,
             source="raster",
-            confidence=Confidence.LOW if label else Confidence.NONE
+            confidence=room_polygon.confidence
         )
         room.sheet_name = page_name
-        room.name_confidence = Confidence.LOW if label else Confidence.NONE
+        room.name_confidence = label_confidence
 
         validation_warnings = validate_room_measurements(room)
         if validation_warnings:
             room.warnings = validation_warnings
 
         rooms.append(room)
+
+    return rooms, warnings
+
+
+def process_label_driven_page(
+    page: pymupdf.Page,
+    page_num: int,
+    scale_factor: float,
+    config: PipelineConfig,
+    filter_pipeline: Optional[SegmentFilterPipeline] = None
+) -> Tuple[List[Room], List[str]]:
+    """
+    Process a page using label-driven detection.
+
+    This is the NEW approach where room labels are the primary source of truth.
+    Boundaries are built around labels using nearby wall segments.
+
+    Args:
+        page: PyMuPDF page
+        page_num: Page number (0-indexed)
+        scale_factor: Scale factor for conversion
+        config: Pipeline configuration
+        filter_pipeline: Optional segment filter pipeline
+
+    Returns:
+        Tuple of (rooms, warnings)
+    """
+    warnings = []
+    page_width, page_height = get_page_dimensions(page)
+    page_name = f"Page {page_num + 1}"
+
+    # Step 1: Extract text for labels
+    text_blocks = []
+    if not config.no_ocr:
+        try:
+            page_image = render_page_to_image(page, config.dpi)
+            text_blocks = extract_all_text(page, page_image=page_image, force_ocr=True)
+        except Exception as e:
+            warnings.append(f"Text extraction failed: {e}")
+            text_blocks = extract_all_text(page, page_image=None, force_ocr=False)
+    else:
+        text_blocks = extract_all_text(page, page_image=None, force_ocr=False)
+
+    if not text_blocks:
+        warnings.append(f"No text found on page {page_num + 1}")
+        return [], warnings
+
+    # Step 2: Extract wall segments
+    segments_raw, extraction_info = extract_wall_segments(page)
+    if not segments_raw:
+        warnings.append(f"No wall segments found on page {page_num + 1}")
+
+    # Apply segment filters if available
+    if filter_pipeline is not None and config.enable_filters and segments_raw:
+        segments_raw, filter_stats = filter_pipeline.filter(
+            segments_raw, page_width, page_height, text_blocks
+        )
+        if filter_stats.total_removed > 0:
+            logger.debug(
+                f"Page {page_num + 1}: Filtered {filter_stats.total_removed} segments"
+            )
+
+    # Convert segments to tuples for hybrid detector
+    wall_segments = []
+    for seg in segments_raw:
+        wall_segments.append((
+            seg.start[0], seg.start[1], seg.end[0], seg.end[1],
+            seg.width if hasattr(seg, 'width') else 1.0
+        ))
+
+    # Step 3: Determine drawing bounds (exclude title block)
+    drawing_bounds = None
+    if filter_pipeline is not None:
+        bounds = filter_pipeline.get_drawing_bounds()
+        if bounds and bounds.title_block_detected:
+            drawing_bounds = (
+                0, 0,
+                bounds.x_max * page_width,
+                page_height
+            )
+
+    if drawing_bounds is None:
+        # Default: exclude right 15% for title block
+        drawing_bounds = (0, 0, page_width * 0.85, page_height)
+
+    # Step 4: Run hybrid detection
+    detector = HybridRoomDetector(
+        drawing_bounds=drawing_bounds,
+        min_label_confidence=config.label_min_confidence,
+        min_boundary_completeness=config.boundary_min_completeness,
+        scale_factor=scale_factor
+    )
+
+    detection_result = detector.detect_rooms(
+        text_blocks=text_blocks,
+        wall_segments=wall_segments,
+        page_width=page_width,
+        page_height=page_height
+    )
+
+    # Step 5: Convert to Room objects
+    rooms = create_rooms_from_detection(
+        detection_result=detection_result,
+        page_num=page_num,
+        scale_factor=scale_factor,
+        ceiling_height_ft=config.default_height
+    )
+
+    # Set page name
+    for room in rooms:
+        room.sheet_name = page_name
+
+    # Add detection warnings
+    warnings.extend(detection_result.warnings)
+
+    logger.info(
+        f"Page {page_num + 1} (label-driven): {len(rooms)} rooms from "
+        f"{detection_result.labels_found} labels"
+    )
 
     return rooms, warnings
 
@@ -476,6 +672,9 @@ def run_pipeline(args) -> PipelineResult:
     start_time = time.time()
 
     # Create config from args
+    # Determine if label-driven detection is enabled
+    label_driven = not getattr(args, 'geometry_only', False)
+
     config = PipelineConfig(
         input_pdf=args.input,
         output_dir=args.output,
@@ -490,6 +689,16 @@ def run_pipeline(args) -> PipelineResult:
         no_annotate=args.no_annotate,
         verbose=args.verbose,
         debug=args.debug,
+        # Filter options
+        enable_filters=not getattr(args, 'no_filters', False),
+        filter_title_block=not getattr(args, 'no_title_block_filter', False),
+        filter_hatching=not getattr(args, 'no_hatching_filter', False),
+        filter_dimension=not getattr(args, 'no_dimension_filter', False),
+        filter_annotation=not getattr(args, 'no_annotation_filter', False),
+        # Label-driven detection options
+        label_driven=label_driven,
+        label_min_confidence=getattr(args, 'label_confidence', 0.5),
+        boundary_min_completeness=getattr(args, 'boundary_completeness', 0.5),
     )
 
     # Setup logging
@@ -518,6 +727,45 @@ def run_pipeline(args) -> PipelineResult:
     )
     all_warnings.extend(scale_warnings)
 
+    # Initialize segment filter pipeline
+    filter_pipeline = None
+    if config.enable_filters:
+        # Create filter configuration
+        debug_output_dir = Path(config.output_dir) / "debug" if config.debug else None
+        filter_config = FilterConfig(
+            enable_drawing_area=config.filter_title_block,
+            enable_hatching=config.filter_hatching,
+            enable_dimension=config.filter_dimension,
+            enable_annotation=config.filter_annotation,
+            title_block_search_region=(TITLE_BLOCK_SEARCH_REGION_START, TITLE_BLOCK_SEARCH_REGION_END),
+            title_block_default_x1=TITLE_BLOCK_DEFAULT_X1,
+            debug_output_dir=debug_output_dir,
+        )
+        filter_pipeline = SegmentFilterPipeline(filter_config)
+
+        # Initialize filter pipeline with sample page images
+        sample_page_nums = page_nums[:5] if len(page_nums) >= 5 else page_nums[:3]
+        if not sample_page_nums:
+            sample_page_nums = page_nums[:1] if page_nums else []
+
+        sample_images = []
+        for page_num in sample_page_nums:
+            page = doc[page_num]
+            img_array = render_page_to_image(page, dpi=100)  # Low DPI for detection
+            # Convert BGR numpy array to RGB PIL Image
+            img_rgb = img_array[:, :, ::-1]  # BGR to RGB
+            pil_img = Image.fromarray(img_rgb)
+            sample_images.append(pil_img)
+
+        if sample_images:
+            filter_pipeline.initialize(sample_images)
+            bounds = filter_pipeline.get_drawing_bounds()
+            if bounds and bounds.title_block_detected:
+                logger.info(
+                    f"Title block detected at x={bounds.title_block_x1:.1%} "
+                    f"(drawing area: 0-{bounds.x_max:.1%})"
+                )
+
     # Process each page
     floor_plan_pages = []
     for page_num in page_nums:
@@ -529,26 +777,57 @@ def run_pipeline(args) -> PipelineResult:
         if config.verbose:
             logger.debug(f"Page {page_num + 1}: {page_type}, path: {processing_path}")
 
-        # Skip non-floor-plan pages (they're processed for heights later)
+        # Skip non-floor-plan pages for VECTOR path (text classification is reliable)
+        # But process RASTER pages even if classified as OTHER (scanned images have no text)
         if page_type != PageType.FLOOR_PLAN:
-            continue
+            if processing_path == ProcessingPath.VECTOR:
+                continue
+            elif processing_path == ProcessingPath.SKIP:
+                continue
+            # For RASTER/HYBRID with OTHER type, still try to process (may be scanned floor plan)
 
         floor_plan_pages.append(page_num)
 
-        # Process based on path
-        if processing_path == ProcessingPath.VECTOR:
-            rooms, warnings = process_vector_page(page, page_num, scale_factor, config)
-        elif processing_path == ProcessingPath.RASTER:
-            rooms, warnings = process_raster_page(page, page_num, scale_factor, config)
-        elif processing_path == ProcessingPath.HYBRID:
-            # Try vector first, fall back to raster
-            rooms, warnings = process_vector_page(page, page_num, scale_factor, config)
+        # Process based on mode and path
+        if config.label_driven:
+            # NEW: Label-driven detection (primary)
+            rooms, warnings = process_label_driven_page(
+                page, page_num, scale_factor, config, filter_pipeline
+            )
+            # Fall back to geometry if label-driven finds no rooms
             if not rooms:
-                rooms, raster_warnings = process_raster_page(page, page_num, scale_factor, config)
-                warnings.extend(raster_warnings)
+                logger.info(
+                    f"Page {page_num + 1}: Label-driven found no rooms, "
+                    f"falling back to geometry"
+                )
+                if processing_path == ProcessingPath.VECTOR:
+                    rooms, warnings = process_vector_page(
+                        page, page_num, scale_factor, config, filter_pipeline
+                    )
+                elif processing_path in (ProcessingPath.RASTER, ProcessingPath.HYBRID):
+                    rooms, warnings = process_raster_page(
+                        page, page_num, scale_factor, config
+                    )
         else:
-            warnings = [f"Skipping page {page_num + 1}"]
-            rooms = []
+            # OLD: Geometry-first detection
+            if processing_path == ProcessingPath.VECTOR:
+                rooms, warnings = process_vector_page(page, page_num, scale_factor, config, filter_pipeline)
+                # Fall back to raster if vector yields no rooms
+                if not rooms:
+                    logger.info(f"Page {page_num + 1}: Vector extraction found no rooms, falling back to raster")
+                    rooms, raster_warnings = process_raster_page(page, page_num, scale_factor, config)
+                    warnings.extend(raster_warnings)
+            elif processing_path == ProcessingPath.RASTER:
+                rooms, warnings = process_raster_page(page, page_num, scale_factor, config)
+            elif processing_path == ProcessingPath.HYBRID:
+                # Try vector first, fall back to raster
+                rooms, warnings = process_vector_page(page, page_num, scale_factor, config, filter_pipeline)
+                if not rooms:
+                    rooms, raster_warnings = process_raster_page(page, page_num, scale_factor, config)
+                    warnings.extend(raster_warnings)
+            else:
+                warnings = [f"Skipping page {page_num + 1}"]
+                rooms = []
 
         all_rooms.extend(rooms)
         all_warnings.extend(warnings)
@@ -559,6 +838,14 @@ def run_pipeline(args) -> PipelineResult:
     # Extract ceiling heights from RCP pages
     height_warnings = extract_ceiling_heights(doc, page_nums, all_rooms, config)
     all_warnings.extend(height_warnings)
+
+    # Filter out artifact rooms (too small to be real rooms)
+    from .constants import MIN_AREA_REAL_SQFT
+    original_count = len(all_rooms)
+    all_rooms = [r for r in all_rooms if r.floor_area_sqft >= MIN_AREA_REAL_SQFT]
+    filtered_count = original_count - len(all_rooms)
+    if filtered_count > 0:
+        logger.info(f"Filtered out {filtered_count} rooms below {MIN_AREA_REAL_SQFT} SF minimum")
 
     # Generate outputs
     output_dir = Path(config.output_dir)

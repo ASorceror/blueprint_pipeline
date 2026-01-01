@@ -34,11 +34,26 @@ ANNOTATION_LINE_WIDTH_MAX = 0.25
 # Lines thicker than this are likely walls
 WALL_LINE_WIDTH_MIN = 0.5
 
+# Drawing area / title block border detection
+# Lines thicker than this are likely border/frame lines
+BORDER_LINE_WIDTH_MIN = 2.0
+
+# Definite wall lines are typically this thick or more
+DEFINITE_WALL_WIDTH_MIN = 1.0
+
+# Medium-weight lines that may be walls or annotations
+MEDIUM_LINE_WIDTH_MIN = 0.4
+MEDIUM_LINE_WIDTH_MAX = 1.0
+
 # Max angle difference to consider lines parallel (degrees)
 PARALLEL_ANGLE_TOLERANCE_DEG = 3
 
 # Max distance between parallel lines to merge as double-wall
 DOUBLE_LINE_DISTANCE_MAX = 10
+
+# Minimum margin from page edge for drawing area (in points)
+# Title block/legend typically in bottom-right corner
+DRAWING_AREA_MARGIN_POINTS = 50
 
 # =============================================================================
 # GAP BRIDGING CONSTANTS
@@ -55,6 +70,10 @@ MAX_GAP_TOLERANCE_INCHES = 4.0
 
 # Points buffer when checking if bridge crosses existing segment
 BRIDGE_CROSS_SEGMENT_BUFFER = 2
+
+# Maximum segments to process in vector path (complex CAD limit)
+# Above this, fall back to raster processing
+MAX_VECTOR_SEGMENTS = 5000
 
 # =============================================================================
 # POLYGON FILTERING CONSTANTS
@@ -310,3 +329,57 @@ class PageType:
     SECTION = "SECTION"
     SCHEDULE = "SCHEDULE"
     OTHER = "OTHER"
+
+# =============================================================================
+# LABEL-DRIVEN DETECTION CONSTANTS
+# =============================================================================
+
+# Enable label-driven detection (set to False for geometry-only)
+LABEL_DRIVEN_DETECTION_ENABLED = True
+
+# Minimum label confidence to use
+LABEL_MIN_CONFIDENCE = 0.5
+
+# Minimum boundary completeness (60% = need 60% of rays to hit walls)
+BOUNDARY_MIN_COMPLETENESS = 0.5
+
+# Number of rays to cast for boundary detection
+BOUNDARY_RAY_COUNT = 16
+
+# Maximum ray distance (points)
+BOUNDARY_MAX_RAY_DISTANCE = 2000
+
+# Cluster distance for grouping nearby labels (points)
+LABEL_CLUSTER_DISTANCE = 100
+
+# Minimum room area for label-driven detection (square feet)
+LABEL_DRIVEN_MIN_AREA_SQFT = 20
+
+# Grid line filter - labels at page edge are likely grid markers
+GRID_LINE_EDGE_THRESHOLD = 100  # Points from edge
+
+# =============================================================================
+# SEGMENT FILTER CONSTANTS
+# =============================================================================
+
+# Title Block Detection
+TITLE_BLOCK_SEARCH_REGION_START = 0.60  # Start searching at 60% of page width
+TITLE_BLOCK_SEARCH_REGION_END = 0.98    # End searching at 98% of page width
+TITLE_BLOCK_DEFAULT_X1 = 0.85           # Default title block left boundary
+TITLE_BLOCK_MARGIN = 0.01               # Safety margin around detected boundary
+
+# Hatching Filter
+HATCHING_ANGLE_TOLERANCE_DEG = 2.0      # Lines within this angle are parallel
+HATCHING_MIN_GROUP_SIZE = 5             # Minimum lines to form hatching group
+HATCHING_MAX_SPACING_RATIO = 0.05       # Max spacing as ratio of line length
+HATCHING_LENGTH_VARIANCE_MAX = 0.3      # Max coefficient of variation for lengths
+
+# Dimension Line Filter
+DIMENSION_LINE_WIDTH_MAX = 0.5          # Max width for dimension lines
+DIMENSION_ARROW_ANGLE_MIN = 30          # Min angle for arrow head detection
+DIMENSION_ARROW_ANGLE_MAX = 60          # Max angle for arrow head detection
+DIMENSION_TEXT_PROXIMITY_PX = 20        # Search radius for dimension text
+
+# Annotation Line Filter
+ANNOTATION_FILTER_WIDTH_MAX = 0.3       # Very thin lines are annotations
+ANNOTATION_MIN_SEGMENTS = 3             # Min connected segments for annotation path

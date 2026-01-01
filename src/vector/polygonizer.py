@@ -9,9 +9,10 @@ import math
 from dataclasses import dataclass, field
 from typing import List, Tuple, Set, Optional
 
-from shapely.geometry import LineString, Polygon, MultiPolygon, Point, GeometryCollection
+from shapely.geometry import LineString, Polygon, MultiPolygon, Point, GeometryCollection, box
 from shapely.ops import polygonize_full, unary_union
 from shapely.validation import make_valid
+from shapely import STRtree, node
 
 from ..constants import (
     DEFAULT_GAP_TOLERANCE_POINTS,
@@ -118,6 +119,9 @@ def bridge_crosses_segment(
     """
     Check if a bridge segment would cross any existing segment.
 
+    NOTE: This is the slow O(n) version kept for compatibility.
+    For large segment counts, use bridge_crosses_segment_indexed() instead.
+
     Args:
         bridge_start: Start point of bridge
         bridge_end: End point of bridge
@@ -149,6 +153,53 @@ def bridge_crosses_segment(
     return False
 
 
+def bridge_crosses_segment_indexed(
+    bridge_start: Tuple[float, float],
+    bridge_end: Tuple[float, float],
+    segment_tree: STRtree,
+    segment_lines: List[LineString],
+    buffer: float = BRIDGE_CROSS_SEGMENT_BUFFER
+) -> bool:
+    """
+    Check if a bridge segment would cross any existing segment using spatial index.
+
+    O(log n) instead of O(n) by using R-tree spatial query.
+
+    Args:
+        bridge_start: Start point of bridge
+        bridge_end: End point of bridge
+        segment_tree: STRtree spatial index of segments
+        segment_lines: List of LineString objects (parallel to tree)
+        buffer: Buffer distance for crossing check
+
+    Returns:
+        True if bridge crosses an existing segment
+    """
+    bridge_line = LineString([bridge_start, bridge_end])
+
+    # Query only segments near the bridge using spatial index
+    # Use buffered bounding box for query
+    query_geom = bridge_line.buffer(buffer + 1.0)
+    candidate_indices = segment_tree.query(query_geom)
+
+    for idx in candidate_indices:
+        seg_line = segment_lines[idx]
+
+        # Check for intersection
+        if bridge_line.crosses(seg_line):
+            return True
+
+        # Also check if bridge is too close to existing segment
+        if bridge_line.distance(seg_line) < buffer:
+            bridge_mid = ((bridge_start[0] + bridge_end[0]) / 2,
+                          (bridge_start[1] + bridge_end[1]) / 2)
+            mid_point = Point(bridge_mid)
+            if seg_line.distance(mid_point) < buffer:
+                return True
+
+    return False
+
+
 def bridge_gaps(
     segments: List[Segment],
     gap_tolerance: float = DEFAULT_GAP_TOLERANCE_POINTS
@@ -162,6 +213,8 @@ def bridge_gaps(
     3. For each dangling endpoint, find nearby dangling endpoints
     4. If distance is within tolerance and bridge doesn't cross existing segments,
        add bridge segment
+
+    OPTIMIZATION: Uses spatial indexing (STRtree) for O(n log n) instead of O(n³).
 
     Args:
         segments: List of wall segments
@@ -182,6 +235,14 @@ def bridge_gaps(
     if len(dangling) < 2:
         return segments, 0
 
+    # Build spatial index for segments (O(n log n) one-time cost)
+    segment_lines = [LineString([seg.start, seg.end]) for seg in segments]
+    segment_tree = STRtree(segment_lines)
+
+    # Build spatial index for dangling points (O(d log d))
+    dangling_points = [Point(p) for p in dangling]
+    dangling_tree = STRtree(dangling_points)
+
     # Find valid bridges
     bridges = []
     used_points: Set[Tuple[float, float]] = set()
@@ -198,10 +259,16 @@ def bridge_gaps(
         best_candidate = None
         best_distance = float('inf')
 
-        for j, p2 in enumerate(dangling):
+        # Use spatial index to find nearby dangling points (O(log d) instead of O(d))
+        query_point = Point(p1)
+        search_area = query_point.buffer(gap_tolerance)
+        nearby_indices = dangling_tree.query(search_area)
+
+        for j in nearby_indices:
             if i == j:
                 continue
 
+            p2 = dangling[j]
             p2_key = point_key(p2)
             if p2_key in used_points:
                 continue
@@ -216,8 +283,8 @@ def bridge_gaps(
 
             # Check if this is better than current best
             if dist < best_distance:
-                # Check if bridge would cross existing segments
-                if not bridge_crosses_segment(p1, p2, segments):
+                # Check if bridge would cross existing segments (O(log n) instead of O(n))
+                if not bridge_crosses_segment_indexed(p1, p2, segment_tree, segment_lines):
                     best_candidate = (p2, dist)
                     best_distance = dist
 
@@ -232,7 +299,7 @@ def bridge_gaps(
     # Combine original segments with bridges
     result = list(segments) + bridges
 
-    logger.info(f"Gap bridging: added {len(bridges)} bridges")
+    logger.info(f"Gap bridging: added {len(bridges)} bridges from {len(dangling)} dangling endpoints")
     return result, len(bridges)
 
 
@@ -284,21 +351,25 @@ def segments_to_polygons(
     if not lines:
         return [], {"error": "no valid lines"}
 
-    # Union all lines to properly node them at intersections
+    # CRITICAL FIX: Use node() instead of unary_union() to add vertices at ALL intersections
+    # unary_union() only merges overlapping segments; node() properly splits lines at every crossing point
+    # This is essential for polygonize_full() to find all closed faces in the planar graph
     try:
-        merged = unary_union(lines)
+        collection = GeometryCollection(lines)
+        noded_geom = node(collection)
+        logger.debug(f"Noded {len(lines)} lines into geometry: {noded_geom.geom_type}")
     except Exception as e:
-        logger.warning(f"Error merging lines: {e}")
-        merged = lines[0]
-        for line in lines[1:]:
-            try:
-                merged = merged.union(line)
-            except:
-                pass
+        logger.warning(f"Error noding lines with node(): {e}, falling back to unary_union")
+        # Fallback to unary_union if node fails (less accurate but better than nothing)
+        try:
+            noded_geom = unary_union(lines)
+        except Exception as union_err:
+            logger.error(f"Both noding methods failed: {union_err}")
+            return [], {"error": f"noding failed: {e}"}
 
-    # Polygonize
+    # Polygonize the properly noded geometry
     try:
-        result = polygonize_full(merged)
+        result = polygonize_full(noded_geom)
         polygons, dangles, cut_edges, invalid_rings = result
     except Exception as e:
         logger.warning(f"Polygonization failed: {e}")
@@ -396,7 +467,8 @@ def filter_room_polygons(
         if not poly.is_valid:
             try:
                 poly = make_valid(poly)
-            except:
+            except Exception as valid_err:
+                logger.debug(f"Could not make polygon valid: {valid_err}")
                 continue
 
         # Handle different geometry types from make_valid
@@ -463,8 +535,9 @@ def filter_room_polygons(
                             break
                         else:
                             skip_indices.add(j)
-            except:
-                pass
+            except Exception as overlap_err:
+                logger.debug(f"Error checking polygon overlap: {overlap_err}")
+                continue
 
         if should_keep:
             final_polygons.append(poly_a)
