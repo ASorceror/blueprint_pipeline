@@ -32,6 +32,12 @@ class Segment:
     end: Tuple[float, float]
     width: float
     color: Optional[Tuple[float, ...]] = None
+    dashes: Optional[List[float]] = None  # Dash pattern from PDF [dash, gap, ...]
+
+    @property
+    def is_dashed(self) -> bool:
+        """Check if this segment has a dash pattern (non-solid line)."""
+        return self.dashes is not None and len(self.dashes) > 0
 
     @property
     def length(self) -> float:
@@ -96,6 +102,30 @@ def extract_all_paths(page: pymupdf.Page) -> List[dict]:
         return []
 
 
+def _parse_dash_pattern(dashes) -> Optional[List[float]]:
+    """
+    Parse dash pattern from PyMuPDF format.
+    
+    PyMuPDF returns dashes as:
+    - None or [] for solid lines
+    - [dash, gap] for simple dashed
+    - [dash, gap, dash, gap, ...] for complex patterns
+    
+    Args:
+        dashes: Dash pattern from PyMuPDF
+        
+    Returns:
+        Parsed dash pattern or None for solid lines
+    """
+    if dashes is None:
+        return None
+    if isinstance(dashes, (list, tuple)) and len(dashes) > 0:
+        # Filter out zero values and convert to list
+        pattern = [float(d) for d in dashes if d > 0]
+        return pattern if pattern else None
+    return None
+
+
 def path_to_segments(path: dict) -> List[Segment]:
     """
     Convert a drawing path to line segments.
@@ -108,9 +138,10 @@ def path_to_segments(path: dict) -> List[Segment]:
     """
     segments = []
 
-    # Get line width and color
+    # Get line width, color, and dash pattern
     width = path.get("width", 0)
     color = path.get("color", None)
+    dashes = _parse_dash_pattern(path.get("dashes", None))
 
     # Get the items in the path
     items = path.get("items", [])
@@ -124,7 +155,7 @@ def path_to_segments(path: dict) -> List[Segment]:
             # item = ("l", start_point, end_point)
             start = (item[1].x, item[1].y)
             end = (item[2].x, item[2].y)
-            segments.append(Segment(start=start, end=end, width=width, color=color))
+            segments.append(Segment(start=start, end=end, width=width, color=color, dashes=dashes))
             current_point = end
 
         elif item_type == "m":  # Move
@@ -138,7 +169,7 @@ def path_to_segments(path: dict) -> List[Segment]:
                 # For simplicity, just connect start to end
                 # More sophisticated: subdivide curve
                 end = (item[4].x, item[4].y)
-                segments.append(Segment(start=current_point, end=end, width=width, color=color))
+                segments.append(Segment(start=current_point, end=end, width=width, color=color, dashes=dashes))
                 current_point = end
 
         elif item_type == "re":  # Rectangle
@@ -149,10 +180,10 @@ def path_to_segments(path: dict) -> List[Segment]:
             p2 = (rect.x1, rect.y0)
             p3 = (rect.x1, rect.y1)
             p4 = (rect.x0, rect.y1)
-            segments.append(Segment(start=p1, end=p2, width=width, color=color))
-            segments.append(Segment(start=p2, end=p3, width=width, color=color))
-            segments.append(Segment(start=p3, end=p4, width=width, color=color))
-            segments.append(Segment(start=p4, end=p1, width=width, color=color))
+            segments.append(Segment(start=p1, end=p2, width=width, color=color, dashes=dashes))
+            segments.append(Segment(start=p2, end=p3, width=width, color=color, dashes=dashes))
+            segments.append(Segment(start=p3, end=p4, width=width, color=color, dashes=dashes))
+            segments.append(Segment(start=p4, end=p1, width=width, color=color, dashes=dashes))
 
         elif item_type == "qu":  # Quad
             # item = ("qu", quad)
@@ -165,7 +196,8 @@ def path_to_segments(path: dict) -> List[Segment]:
                     start=points[i],
                     end=points[(i + 1) % 4],
                     width=width,
-                    color=color
+                    color=color,
+                    dashes=dashes
                 ))
 
     return segments

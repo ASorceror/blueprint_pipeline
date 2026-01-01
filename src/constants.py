@@ -383,3 +383,12 @@ DIMENSION_TEXT_PROXIMITY_PX = 20        # Search radius for dimension text
 # Annotation Line Filter
 ANNOTATION_FILTER_WIDTH_MAX = 0.3       # Very thin lines are annotations
 ANNOTATION_MIN_SEGMENTS = 3             # Min connected segments for annotation path
+
+# Grid Line Filter
+# Grid lines are structural reference lines with letters (A,B,C) or numbers (1,2,3)
+# They span the full page and must be filtered BEFORE room detection
+GRID_LINE_MAX_WIDTH = 1.5               # Grid lines are thin (0.5-1.5pt typically)
+GRID_LINE_MIN_SPAN_RATIO = 0.7          # Must span 70% of page dimension
+GRID_LINE_ANGLE_TOLERANCE_DEG = 2.0     # Must be horizontal or vertical
+GRID_LINE_EDGE_THRESHOLD_POINTS = 100.0 # Endpoints must be within 100pt of page edge
+GRID_LINE_REQUIRE_DASHED = False        # If True, only filter dashed lines
