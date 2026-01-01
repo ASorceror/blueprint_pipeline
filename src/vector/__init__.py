@@ -6,7 +6,8 @@ from .extractor import (
     path_to_segments,
     paths_to_segments,
     filter_wall_segments,
-    extract_wall_segments,
+    extract_wall_segments_simple as extract_wall_segments,  # backward compat
+    extract_wall_segments as extract_wall_segments_full,    # new API with info
 )
 
 from .wall_merger import (
