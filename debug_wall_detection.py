@@ -810,6 +810,106 @@ def filter_curved_segments(segments, max_curve_length=60, curvature_threshold=0.
     return filtered, len(curved_ids)
 
 
+def filter_isolated_segments(segments, connection_tolerance=5.0, min_component_size=10):
+    """
+    Filter out isolated/disconnected segments that aren't part of the main wall network.
+
+    Real walls are connected - they form room boundaries. Floating segments
+    in the middle of nowhere are likely noise (grid labels, dimension ticks, symbols).
+
+    Args:
+        segments: List of wall segments
+        connection_tolerance: Max distance between endpoints to consider connected (pts)
+        min_component_size: Minimum number of segments in a connected component to keep
+
+    Returns:
+        (filtered_segments, num_removed)
+    """
+    if len(segments) < min_component_size:
+        return segments, 0
+
+    from collections import defaultdict
+
+    # Build adjacency graph based on endpoint proximity
+    # Two segments are connected if they share an endpoint (within tolerance)
+
+    # Create spatial index of endpoints
+    endpoint_to_segments = defaultdict(set)
+
+    for i, seg in enumerate(segments):
+        x1, y1 = seg.start
+        x2, y2 = seg.end
+
+        # Round to grid for spatial hashing
+        key1 = (round(x1 / connection_tolerance), round(y1 / connection_tolerance))
+        key2 = (round(x2 / connection_tolerance), round(y2 / connection_tolerance))
+
+        endpoint_to_segments[key1].add(i)
+        endpoint_to_segments[key2].add(i)
+
+    # Build adjacency list
+    adjacency = defaultdict(set)
+
+    for key, seg_indices in endpoint_to_segments.items():
+        # All segments sharing this endpoint are connected
+        seg_list = list(seg_indices)
+        for i in range(len(seg_list)):
+            for j in range(i + 1, len(seg_list)):
+                adjacency[seg_list[i]].add(seg_list[j])
+                adjacency[seg_list[j]].add(seg_list[i])
+
+    # Also check neighboring grid cells for connections
+    for key, seg_indices in endpoint_to_segments.items():
+        kx, ky = key
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                neighbor_key = (kx + dx, ky + dy)
+                if neighbor_key in endpoint_to_segments:
+                    for i in seg_indices:
+                        for j in endpoint_to_segments[neighbor_key]:
+                            if i != j:
+                                adjacency[i].add(j)
+                                adjacency[j].add(i)
+
+    # Find connected components using BFS
+    visited = set()
+    components = []
+
+    for start in range(len(segments)):
+        if start in visited:
+            continue
+
+        # BFS to find all segments in this component
+        component = []
+        queue = [start]
+
+        while queue:
+            node = queue.pop(0)
+            if node in visited:
+                continue
+            visited.add(node)
+            component.append(node)
+
+            for neighbor in adjacency[node]:
+                if neighbor not in visited:
+                    queue.append(neighbor)
+
+        components.append(component)
+
+    # Keep only segments from large components
+    keep_indices = set()
+    for component in components:
+        if len(component) >= min_component_size:
+            keep_indices.update(component)
+
+    filtered = [seg for i, seg in enumerate(segments) if i in keep_indices]
+    removed = len(segments) - len(filtered)
+
+    return filtered, removed
+
+
 def filter_room_label_boxes(segments, box_size_min=15, box_size_max=80, tolerance=5):
     """
     Filter small rectangular boxes that surround room labels/numbers.
@@ -1536,6 +1636,13 @@ def visualize_walls_only(pdf_path: str, output_path: str):
     walls, label_box_removed = filter_room_label_boxes(walls, box_size_min=10, box_size_max=50, tolerance=5)
     stats['label_boxes'] = label_box_removed
 
+    # Filter isolated/disconnected segments that aren't part of the wall network
+    # Real walls are connected to form room boundaries - floating segments are noise
+    walls_before_isolated = len(walls)
+    walls, isolated_removed = filter_isolated_segments(walls, connection_tolerance=8.0, min_component_size=5)
+    stats['isolated'] = isolated_removed
+    print(f"  Isolated segments filter: {isolated_removed} removed (from {walls_before_isolated} to {len(walls)})")
+
     print(f"\nFilter results:")
     print(f"  Outside drawing area: {stats['outside_drawing']}")
     print(f"  Dashed (grid lines): {stats['dashed_grid']}")
@@ -1550,6 +1657,7 @@ def visualize_walls_only(pdf_path: str, output_path: str):
     print(f"  Door swings (arcs): {door_swing_removed}")
     print(f"  Curved segments: {curved_removed}")
     print(f"  Room label boxes: {label_box_removed}")
+    print(f"  Isolated segments: {isolated_removed}")
     print(f"  WALLS KEPT: {len(walls)} of {len(segments_raw)} ({100*len(walls)/len(segments_raw):.1f}%)")
 
     # OUTPUT 3: Filter statistics file
