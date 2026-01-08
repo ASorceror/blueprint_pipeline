@@ -27,6 +27,18 @@ from .fill_extractor import (
     extract_filled_regions,
     classify_segment_by_region,
 )
+from .legend_detector import (
+    LegendDetector,
+    detect_legend,
+    get_legend_or_defaults,
+)
+from .phase_classifier import (
+    ConstructionPhaseClassifier,
+    ClassificationResult,
+    PhaseClassificationResult,
+    classify_segments,
+    classify_segments_simple,
+)
 
 __all__ = [
     'DrawingAreaFilter',
@@ -41,4 +53,12 @@ __all__ = [
     'FillExtractionResult',
     'extract_filled_regions',
     'classify_segment_by_region',
+    'LegendDetector',
+    'detect_legend',
+    'get_legend_or_defaults',
+    'ConstructionPhaseClassifier',
+    'ClassificationResult',
+    'PhaseClassificationResult',
+    'classify_segments',
+    'classify_segments_simple',
 ]

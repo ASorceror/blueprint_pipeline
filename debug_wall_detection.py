@@ -1696,6 +1696,48 @@ def visualize_walls_only(pdf_path: str, output_path: str):
         print(f"  Average length: {sum(lengths)/len(lengths):.1f} pts")
 
     # ========================================
+    # STEP 3.5: Construction Phase Detection
+    # ========================================
+    print(f"\n--- Step 3.5: Construction Phase Detection ---")
+
+    from src.vector.filters.phase_classifier import ConstructionPhaseClassifier
+    from src.vector.construction_phase import ConstructionPhase, get_phase_color
+
+    # Re-open page for phase detection (doc was closed for morphological)
+    phase_doc = pymupdf.open(pdf_path)
+    phase_page = phase_doc[0]
+
+    # Classify walls by construction phase
+    phase_classifier = ConstructionPhaseClassifier()
+    phase_result = phase_classifier.classify_page(phase_page, walls)
+
+    phase_doc.close()
+
+    print(f"\nPhase classification results:")
+    print(phase_result.stats.summary())
+
+    # OUTPUT: Phase statistics file
+    phase_stats_path = output_dir / f"{base_name}_phase_stats.txt"
+    with open(phase_stats_path, 'w') as f:
+        f.write(f"Construction Phase Classification Results\n")
+        f.write(f"=========================================\n")
+        f.write(f"Input: {pdf_path}\n\n")
+        f.write(phase_result.stats.summary())
+        f.write(f"\n\nLegend detection: {phase_result.legend_result.detection_method if phase_result.legend_result else 'None'}\n")
+        if phase_result.legend_result and phase_result.legend_result.entries:
+            f.write(f"Legend entries:\n")
+            for entry in phase_result.legend_result.entries:
+                f.write(f"  - {entry.phase.value}: {entry.label}\n")
+        if phase_result.fill_result:
+            f.write(f"\nFill regions:\n")
+            f.write(f"  Gray (EXISTING): {len(phase_result.fill_result.gray_regions)}\n")
+            f.write(f"  Hatched (N.I.C.): {len(phase_result.fill_result.hatched_regions)}\n")
+    print(f"OUTPUT: Phase statistics -> {phase_stats_path}")
+
+    # Use phase-classified walls for visualization
+    walls = phase_result.segments
+
+    # ========================================
     # STEP 4: Create Final Wall Visualization
     # ========================================
     print(f"\n--- Step 4: Creating Wall Visualization ---")
@@ -1759,6 +1801,71 @@ def visualize_walls_only(pdf_path: str, output_path: str):
 
     clean_shape.commit()
 
+    # --- Output 4c: Walls colored by CONSTRUCTION PHASE ---
+    phase_doc = pymupdf.open()  # New blank document
+    phase_page = phase_doc.new_page(width=page_width, height=page_height)
+
+    # Fill with white background
+    phase_page.draw_rect(phase_page.rect, color=(1, 1, 1), fill=(1, 1, 1))
+
+    # Phase color mapping
+    PHASE_COLORS = {
+        'NEW': (0, 0, 1),              # Blue - new construction
+        'EXISTING': (0.5, 0.5, 0.5),   # Gray - existing
+        'NOT_IN_CONTRACT': (1, 0.5, 0), # Orange - N.I.C.
+        'DEMO': (1, 0, 0),             # Red - demolition
+        'UNKNOWN': (0.7, 0.7, 0.7),    # Light gray - unknown
+    }
+
+    # Draw walls by phase
+    phase_shape = phase_page.new_shape()
+
+    for seg in walls:
+        x1, y1 = seg.start
+        x2, y2 = seg.end
+        width = seg.width if seg.width is not None else 1.0
+
+        # Get color based on phase
+        phase = seg.construction_phase or 'UNKNOWN'
+        color = PHASE_COLORS.get(phase, PHASE_COLORS['UNKNOWN'])
+
+        phase_shape.draw_line((x1, y1), (x2, y2))
+        phase_shape.finish(color=color, width=max(1.0, width))
+
+    phase_shape.commit()
+
+    # Draw drawing area boundary
+    phase_ref = phase_page.new_shape()
+    phase_ref.draw_line((drawing_x_max, 0), (drawing_x_max, page_height))
+    phase_ref.finish(color=(0.5, 0.5, 0.5), width=1, dashes="[5 3]")
+    phase_ref.commit()
+
+    # Add legend to phase visualization
+    legend_y = 50
+    legend_x = page_width - 180
+    for phase_name, phase_color in PHASE_COLORS.items():
+        if phase_name == 'UNKNOWN':
+            continue
+        # Draw color swatch
+        phase_page.draw_rect(pymupdf.Rect(legend_x, legend_y, legend_x + 20, legend_y + 10),
+                            color=phase_color, fill=phase_color)
+        # Add label
+        phase_page.insert_text((legend_x + 25, legend_y + 9), phase_name, fontsize=8)
+        legend_y += 15
+
+    # Save phase-colored PDF
+    phase_output_path = output_dir / f"{base_name}_walls_by_phase.pdf"
+    phase_doc.save(str(phase_output_path))
+    print(f"OUTPUT 4d: Walls by phase -> {phase_output_path}")
+
+    # Also save phase visualization as PNG
+    phase_pix = phase_page.get_pixmap(dpi=150)
+    phase_png_path = output_dir / f"{base_name}_walls_by_phase.png"
+    phase_pix.save(str(phase_png_path))
+    print(f"OUTPUT 4e: Walls by phase PNG -> {phase_png_path}")
+
+    phase_doc.close()
+
     # Draw drawing area boundary
     clean_ref = clean_page.new_shape()
     clean_ref.draw_line((drawing_x_max, 0), (drawing_x_max, page_height))
@@ -1790,10 +1897,15 @@ def visualize_walls_only(pdf_path: str, output_path: str):
     doc.close()
 
     print(f"OUTPUT 4: Wall visualization -> {output_path}")
-    print(f"\nColor legend:")
+    print(f"\nColor legend (by width):")
     print(f"  RED  = Heavy walls (width >= 1.5 pts) - exterior/structural")
     print(f"  BLUE = Standard walls (width 0.5-1.5 pts) - interior partitions")
     print(f"  ORANGE DASHED = Drawing area boundary")
+    print(f"\nPhase colors (_walls_by_phase output):")
+    print(f"  BLUE   = NEW CONSTRUCTION")
+    print(f"  GRAY   = EXISTING CONSTRUCTION")
+    print(f"  ORANGE = NOT IN CONTRACT (N.I.C.)")
+    print(f"  RED    = DEMOLITION")
 
     # ========================================
     # STEP 5: VLM Validation (Optional)
