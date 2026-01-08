@@ -9,6 +9,7 @@ Provides filtering capabilities for segment extraction:
 - AnnotationLineFilter: Removes thin annotation lines
 - SegmentFilterPipeline: Orchestrates all filters
 - FilterConfig: Configuration dataclass for the pipeline
+- FillExtractor: Extracts filled regions for construction phase detection
 """
 
 from .drawing_area_filter import DrawingAreaFilter
@@ -19,6 +20,13 @@ from .segment_filters import (
     AnnotationLineFilter,
 )
 from .filter_pipeline import SegmentFilterPipeline, FilterConfig
+from .fill_extractor import (
+    FillExtractor,
+    FilledRegion,
+    FillExtractionResult,
+    extract_filled_regions,
+    classify_segment_by_region,
+)
 
 __all__ = [
     'DrawingAreaFilter',
@@ -28,4 +36,9 @@ __all__ = [
     'AnnotationLineFilter',
     'SegmentFilterPipeline',
     'FilterConfig',
+    'FillExtractor',
+    'FilledRegion',
+    'FillExtractionResult',
+    'extract_filled_regions',
+    'classify_segment_by_region',
 ]

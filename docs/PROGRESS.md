@@ -2,7 +2,7 @@
 
 > **Purpose:** Persistent tracking of project progress across sessions.
 > **Location:** `C:\measure\blueprint_pipeline\docs\PROGRESS.md`
-> **Last Updated:** 2026-01-08 (Phase 1 Complete)
+> **Last Updated:** 2026-01-08 (Phase 2 Complete)
 
 ---
 
@@ -22,7 +22,7 @@ The Blueprint Measurement Pipeline extracts room measurements from commercial co
 | Isolated Segment Filter | **Working** | Connectivity-based |
 | Title Block Detection | **Working** | 78% boundary default |
 | VLM Validation | **Working** | Claude Vision integration |
-| **Construction Phase Detection** | **Phase 1 Done** | Data model + fill extraction |
+| **Construction Phase Detection** | **Phase 2 Done** | Data model + region extraction |
 | Room Identification | Not Started | Depends on wall detection |
 | Measurements | Not Started | Depends on room ID |
 
@@ -75,11 +75,15 @@ Classify walls by construction phase: NEW, EXISTING, NOT IN CONTRACT (N.I.C.), D
 - [x] Modify `path_to_segments()` to extract fill from PyMuPDF
 - [x] Unit tests (28 tests passing in `tests/test_construction_phase.py`)
 
-#### Phase 2: Fill Extraction (Day 2)
+#### Phase 2: Fill Extraction ✅ COMPLETE
 - [x] Fill extraction integrated in `path_to_segments()` (done in Phase 1)
 - [x] Gray fill detection (0.25-0.75 range) via `is_gray_fill()`
-- [ ] Create `src/vector/filters/fill_extractor.py` for region detection
-- [ ] Hatching detection (parallel diagonal line clustering)
+- [x] Create `src/vector/filters/fill_extractor.py` for region detection
+- [x] `FilledRegion` and `FillExtractionResult` dataclasses
+- [x] `FillExtractor` class with gray region and hatching detection
+- [x] Hatching detection (parallel diagonal line clustering)
+- [x] Unit tests (15 tests passing in `tests/test_fill_extractor.py`)
+- [x] Verified: 38 gray regions, 13 hatched regions in Woodstock A111
 
 #### Phase 3: Legend Detection (Days 3-4)
 - [ ] Create `src/vector/filters/legend_detector.py`
@@ -166,7 +170,19 @@ RED    = DEMOLITION (dashed)
 
 ## Session Notes
 
-### 2026-01-08 (Continued - Phase 1 Implementation)
+### 2026-01-08 (Continued - Phase 2 Implementation)
+- **COMPLETED Phase 2: Fill Extraction**
+  - Created `src/vector/filters/fill_extractor.py`:
+    - `FilledRegion` dataclass with point/segment containment
+    - `FillExtractionResult` with phase lookup by point
+    - `FillExtractor` class for region detection
+    - Gray-filled region detection (wall-like shapes)
+    - Hatching pattern detection (diagonal line clustering)
+  - Created `tests/test_fill_extractor.py` with 15 unit tests
+  - Updated `src/vector/filters/__init__.py` with exports
+  - Verified on Woodstock A111: 38 gray regions, 13 hatched regions
+
+### 2026-01-08 (Earlier - Phase 1 Implementation)
 - **COMPLETED Phase 1: Data Model**
   - Created `src/vector/construction_phase.py` with:
     - `ConstructionPhase` enum with fuzzy string parsing
