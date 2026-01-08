@@ -27,12 +27,39 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Segment:
-    """A line segment with metadata."""
+    """
+    A line segment with metadata.
+
+    Represents a single line segment extracted from a PDF vector path,
+    including visual properties (width, color, dashes) and optional
+    construction phase classification.
+
+    Attributes:
+        start: Start point (x, y) in PDF points
+        end: End point (x, y) in PDF points
+        width: Line width in PDF points
+        color: Stroke color as RGB tuple (0-1 range), None for black
+        dashes: Dash pattern [dash, gap, ...], None for solid
+        fill: Fill color as RGB tuple (0-1 range), None for no fill
+        fill_type: PyMuPDF draw type ('s'=stroke, 'f'=fill, 'fs'=both)
+        construction_phase: Classified phase (NEW, EXISTING, etc.)
+        phase_confidence: Confidence in phase classification (0-1)
+        phase_method: Method used for classification
+    """
     start: Tuple[float, float]
     end: Tuple[float, float]
     width: float
     color: Optional[Tuple[float, ...]] = None
     dashes: Optional[List[float]] = None  # Dash pattern from PDF [dash, gap, ...]
+
+    # Fill information (for construction phase detection)
+    fill: Optional[Tuple[float, ...]] = None  # Fill color from PyMuPDF
+    fill_type: Optional[str] = None  # 's'=stroke, 'f'=fill, 'fs'=both
+
+    # Construction phase classification
+    construction_phase: Optional[str] = None  # ConstructionPhase value
+    phase_confidence: float = 0.0
+    phase_method: Optional[str] = None  # ClassificationMethod value
 
     @property
     def is_dashed(self) -> bool:
@@ -82,6 +109,51 @@ class Segment:
         numerator = abs((y2 - y1) * x0 - (x2 - x1) * y0 + x2 * y1 - y2 * x1)
         return numerator / line_len
 
+    @property
+    def has_fill(self) -> bool:
+        """Check if this segment has a fill color."""
+        return self.fill is not None
+
+    @property
+    def is_stroke_only(self) -> bool:
+        """Check if this segment is stroke-only (no fill)."""
+        return self.fill is None or self.fill_type == 's'
+
+    @property
+    def is_gray_fill(self) -> bool:
+        """
+        Check if this segment has a gray fill (typically EXISTING construction).
+
+        Gray fills in the 0.25-0.75 range indicate existing construction
+        per industry convention.
+        """
+        if self.fill is None:
+            return False
+
+        if len(self.fill) < 3:
+            gray = self.fill[0]
+        else:
+            r, g, b = self.fill[0], self.fill[1], self.fill[2]
+            # Check if grayscale
+            if max(abs(r - g), abs(g - b), abs(r - b)) > 0.05:
+                return False
+            gray = (r + g + b) / 3
+
+        return 0.25 <= gray <= 0.75
+
+    def set_phase(self, phase: str, confidence: float, method: str) -> None:
+        """
+        Set the construction phase classification.
+
+        Args:
+            phase: ConstructionPhase value as string
+            confidence: Classification confidence (0-1)
+            method: ClassificationMethod value as string
+        """
+        self.construction_phase = phase
+        self.phase_confidence = confidence
+        self.phase_method = method
+
 
 def extract_all_paths(page: pymupdf.Page) -> List[dict]:
     """
@@ -130,11 +202,20 @@ def path_to_segments(path: dict) -> List[Segment]:
     """
     Convert a drawing path to line segments.
 
+    Extracts line segments from PyMuPDF path dictionaries, preserving
+    visual properties including fill information for construction phase detection.
+
     Args:
-        path: Dictionary containing path data from pymupdf
+        path: Dictionary containing path data from pymupdf with keys:
+            - items: List of draw commands
+            - width: Line width
+            - color: Stroke color (RGB tuple)
+            - fill: Fill color (RGB tuple or None)
+            - type: Draw type ('s'=stroke, 'f'=fill, 'fs'=both)
+            - dashes: Dash pattern
 
     Returns:
-        List of Segment objects
+        List of Segment objects with fill info preserved
     """
     segments = []
 
@@ -142,6 +223,10 @@ def path_to_segments(path: dict) -> List[Segment]:
     width = path.get("width", 0)
     color = path.get("color", None)
     dashes = _parse_dash_pattern(path.get("dashes", None))
+
+    # Get fill information for construction phase detection
+    fill = path.get("fill", None)
+    fill_type = path.get("type", None)  # 's'=stroke, 'f'=fill, 'fs'=both
 
     # Get the items in the path
     items = path.get("items", [])
@@ -155,7 +240,10 @@ def path_to_segments(path: dict) -> List[Segment]:
             # item = ("l", start_point, end_point)
             start = (item[1].x, item[1].y)
             end = (item[2].x, item[2].y)
-            segments.append(Segment(start=start, end=end, width=width, color=color, dashes=dashes))
+            segments.append(Segment(
+                start=start, end=end, width=width, color=color, dashes=dashes,
+                fill=fill, fill_type=fill_type
+            ))
             current_point = end
 
         elif item_type == "m":  # Move
@@ -169,7 +257,10 @@ def path_to_segments(path: dict) -> List[Segment]:
                 # For simplicity, just connect start to end
                 # More sophisticated: subdivide curve
                 end = (item[4].x, item[4].y)
-                segments.append(Segment(start=current_point, end=end, width=width, color=color, dashes=dashes))
+                segments.append(Segment(
+                    start=current_point, end=end, width=width, color=color, dashes=dashes,
+                    fill=fill, fill_type=fill_type
+                ))
                 current_point = end
 
         elif item_type == "re":  # Rectangle
@@ -180,10 +271,22 @@ def path_to_segments(path: dict) -> List[Segment]:
             p2 = (rect.x1, rect.y0)
             p3 = (rect.x1, rect.y1)
             p4 = (rect.x0, rect.y1)
-            segments.append(Segment(start=p1, end=p2, width=width, color=color, dashes=dashes))
-            segments.append(Segment(start=p2, end=p3, width=width, color=color, dashes=dashes))
-            segments.append(Segment(start=p3, end=p4, width=width, color=color, dashes=dashes))
-            segments.append(Segment(start=p4, end=p1, width=width, color=color, dashes=dashes))
+            segments.append(Segment(
+                start=p1, end=p2, width=width, color=color, dashes=dashes,
+                fill=fill, fill_type=fill_type
+            ))
+            segments.append(Segment(
+                start=p2, end=p3, width=width, color=color, dashes=dashes,
+                fill=fill, fill_type=fill_type
+            ))
+            segments.append(Segment(
+                start=p3, end=p4, width=width, color=color, dashes=dashes,
+                fill=fill, fill_type=fill_type
+            ))
+            segments.append(Segment(
+                start=p4, end=p1, width=width, color=color, dashes=dashes,
+                fill=fill, fill_type=fill_type
+            ))
 
         elif item_type == "qu":  # Quad
             # item = ("qu", quad)
@@ -197,7 +300,9 @@ def path_to_segments(path: dict) -> List[Segment]:
                     end=points[(i + 1) % 4],
                     width=width,
                     color=color,
-                    dashes=dashes
+                    dashes=dashes,
+                    fill=fill,
+                    fill_type=fill_type
                 ))
 
     return segments

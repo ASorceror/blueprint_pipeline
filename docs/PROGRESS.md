@@ -2,7 +2,7 @@
 
 > **Purpose:** Persistent tracking of project progress across sessions.
 > **Location:** `C:\measure\blueprint_pipeline\docs\PROGRESS.md`
-> **Last Updated:** 2026-01-08
+> **Last Updated:** 2026-01-08 (Phase 1 Complete)
 
 ---
 
@@ -22,7 +22,7 @@ The Blueprint Measurement Pipeline extracts room measurements from commercial co
 | Isolated Segment Filter | **Working** | Connectivity-based |
 | Title Block Detection | **Working** | 78% boundary default |
 | VLM Validation | **Working** | Claude Vision integration |
-| **Construction Phase Detection** | **PLANNED** | See below |
+| **Construction Phase Detection** | **Phase 1 Done** | Data model + fill extraction |
 | Room Identification | Not Started | Depends on wall detection |
 | Measurements | Not Started | Depends on room ID |
 
@@ -69,16 +69,17 @@ Classify walls by construction phase: NEW, EXISTING, NOT IN CONTRACT (N.I.C.), D
 
 ### Implementation Phases
 
-#### Phase 1: Data Model (Day 1)
-- [ ] Create `src/vector/construction_phase.py`
-- [ ] Extend `Segment` dataclass with fill/phase attributes
-- [ ] Unit tests
+#### Phase 1: Data Model ✅ COMPLETE
+- [x] Create `src/vector/construction_phase.py` - enums, dataclasses, utilities
+- [x] Extend `Segment` dataclass with fill/phase attributes
+- [x] Modify `path_to_segments()` to extract fill from PyMuPDF
+- [x] Unit tests (28 tests passing in `tests/test_construction_phase.py`)
 
 #### Phase 2: Fill Extraction (Day 2)
-- [ ] Create `src/vector/filters/fill_extractor.py`
-- [ ] Modify `path_to_segments()` for fill extraction
-- [ ] Gray fill detection (0.3-0.7 range)
-- [ ] Hatching detection
+- [x] Fill extraction integrated in `path_to_segments()` (done in Phase 1)
+- [x] Gray fill detection (0.25-0.75 range) via `is_gray_fill()`
+- [ ] Create `src/vector/filters/fill_extractor.py` for region detection
+- [ ] Hatching detection (parallel diagonal line clustering)
 
 #### Phase 3: Legend Detection (Days 3-4)
 - [ ] Create `src/vector/filters/legend_detector.py`
@@ -165,7 +166,25 @@ RED    = DEMOLITION (dashed)
 
 ## Session Notes
 
-### 2026-01-08
+### 2026-01-08 (Continued - Phase 1 Implementation)
+- **COMPLETED Phase 1: Data Model**
+  - Created `src/vector/construction_phase.py` with:
+    - `ConstructionPhase` enum with fuzzy string parsing
+    - `FillPattern` and `ClassificationMethod` enums
+    - `LegendEntry`, `LegendDetectionResult` dataclasses
+    - `PhaseClassificationStats` for tracking
+    - `is_gray_fill()`, `classify_fill_color()` utilities
+    - Industry default legend and phase colors
+  - Extended `Segment` dataclass in `extractor.py`:
+    - Added `fill`, `fill_type` attributes
+    - Added `has_fill`, `is_stroke_only`, `is_gray_fill` properties
+    - Added `set_phase()` method
+  - Updated `path_to_segments()` to extract fill from PyMuPDF drawings
+  - Created `tests/test_construction_phase.py` with 28 unit tests
+  - Verified on real PDF: 108 gray fills detected in Woodstock A111
+  - All existing tests still pass (no regression)
+
+### 2026-01-08 (Earlier)
 - Completed isolated segment filter integration
 - Researched construction plan legends
 - Validated PyMuPDF fill detection works
